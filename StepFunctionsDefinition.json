@@ -1,0 +1,164 @@
+{
+    "Comment": "A description of my state machine",
+    "StartAt": "Lambda Invoke",
+    "States": {
+      "Lambda Invoke": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::lambda:invoke",
+        "OutputPath": "$.Payload",
+        "Parameters": {
+          "FunctionName": "arn:aws:lambda:us-east-1:<acccount_number>:function:findRDSInstancesWithNonZeroRetention:$LATEST",
+          "Payload.$": "$"
+        },
+        "Retry": [
+          {
+            "ErrorEquals": [
+              "Lambda.ServiceException",
+              "Lambda.AWSLambdaException",
+              "Lambda.SdkClientException",
+              "Lambda.TooManyRequestsException"
+            ],
+            "IntervalSeconds": 2,
+            "MaxAttempts": 6,
+            "BackoffRate": 2
+          }
+        ],
+        "Next": "Map"
+      },
+      "Map": {
+        "Type": "Map",
+        "ItemProcessor": {
+          "ProcessorConfig": {
+            "Mode": "INLINE"
+          },
+          "StartAt": "Choice",
+          "States": {
+            "Choice": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.value",
+                  "StringEquals": "stopped",
+                  "Next": "StartDBInstanceLambda"
+                },
+                {
+                  "Variable": "$.value",
+                  "StringEquals": "available",
+                  "Next": "ModifyDBInstance"
+                },
+                {
+                  "Or": [
+                    {
+                      "Variable": "$.value",
+                      "StringEquals": "starting"
+                    },
+                    {
+                      "Variable": "$.value",
+                      "StringEquals": "rebooting"
+                    },
+                    {
+                      "Variable": "$.value",
+                      "StringEquals": "backing-up"
+                    }
+                  ],
+                  "Next": "Wait"
+                }
+              ]
+            },
+            "Wait": {
+              "Type": "Wait",
+              "Seconds": 300,
+              "Next": "ModifyDBInstanceForRDS"
+            },
+            "StartDBInstanceLambda": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+              "Parameters": {
+                "FunctionName": "arn:aws:lambda:us-east-1:<account_number>:function:performRDSActions:$LATEST",
+                "Payload": {
+                  "DBInstanceIdentifier.$": "$.key",
+                  "Action": "Start",
+                  "TaskToken.$": "$$.Task.Token"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 6,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "ModifyDBInstanceLambda",
+              "ResultPath": null
+            },
+            "ModifyDBInstanceLambda": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+              "Parameters": {
+                "FunctionName": "arn:aws:lambda:us-east-1:<account_number>:function:performRDSActions:$LATEST",
+                "Payload": {
+                  "DBInstanceIdentifier.$": "$.key",
+                  "Action": "Modify",
+                  "ApplyImmediately": "True",
+                  "BackupRetentionPeriod": 0,
+                  "TaskToken.$": "$$.Task.Token"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 6,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "StopDBInstance",
+              "ResultPath": null
+            },
+            "StopDBInstance": {
+              "Type": "Task",
+              "End": true,
+              "Parameters": {
+                "DbInstanceIdentifier.$": "$.key"
+              },
+              "Resource": "arn:aws:states:::aws-sdk:rds:stopDBInstance"
+            },
+            "ModifyDBInstance": {
+              "Type": "Task",
+              "Parameters": {
+                "DbInstanceIdentifier.$": "$.key",
+                "ApplyImmediately": "True",
+                "BackupRetentionPeriod": 0
+              },
+              "Resource": "arn:aws:states:::aws-sdk:rds:modifyDBInstance",
+              "End": true
+            },
+            "ModifyDBInstanceForRDS": {
+              "Type": "Task",
+              "End": true,
+              "Parameters": {
+                "DbInstanceIdentifier.$": "$.key",
+                "ApplyImmediately": "True",
+                "BackupRetentionPeriod": 0
+              },
+              "Resource": "arn:aws:states:::aws-sdk:rds:modifyDBInstance"
+            }
+          }
+        },
+        "End": true,
+        "InputPath": "$.RDSInstances[*]",
+        "ResultPath": null
+      }
+    }
+  }
